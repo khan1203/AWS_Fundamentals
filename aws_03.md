@@ -1,4 +1,4 @@
-# Complete Step-by-Step Guide: AWS VPC with Public & Private Subnets
+# AWS VPC with Public & Private Subnets: Step-by-Step
 
 ---
 ![AWS VPC Diagram](assets/image_03.png)
