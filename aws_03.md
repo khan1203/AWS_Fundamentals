@@ -6,19 +6,7 @@ This guide deploys MongoDB on a private EC2 instance, accessed only through a pu
 
 **Architecture**
 
-```
-Internet
-   |
-  IGW
-   |
-  VPC 10.0.0.0/16 (ap-southeast-1)
-   |
-   +-- Public Subnet 10.0.1.0/24 -- Public RT (0.0.0.0/0 -> IGW)
-   |       -> Bastion Host (public IP) + NAT Gateway
-   |
-   +-- Private Subnet 10.0.2.0/24 -- Private RT (0.0.0.0/0 -> NAT)
-           -> MongoDB Instance (no public IP)
-```
+![AWS VPC Diagram](assets/arch_3.png)
 
 Here's how traffic moves through this setup:
 
