@@ -1,7 +1,7 @@
 # AWS VPC with Public & Private Subnets: Step-by-Step
 
 ---
-![AWS VPC Diagram](assets/image_03.png)
+![AWS VPC Diagram](assets/image_01.png)
 
 ## STEP 1 — Create a VPC
 
