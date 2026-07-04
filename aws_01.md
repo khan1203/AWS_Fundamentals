@@ -1,4 +1,9 @@
-# AWS VPC with Public & Private Subnets: Step-by-Step
+# Setup AWS VPC with Public & Private Subnets and Establish SSH Connection between them
+
+### Overview
+In a cloud environment, a common security practice is to place sensitive resources like EC2 instances in private subnets to minimize exposure to the internet. To access these private instances securely, you can use a bastion server or host server (or jump box) situated in a public subnet. The bastion server acts as an intermediary for establishing SSH connections to instances in private subnets.
+
+Here, We will go through a step-by-step guide on how to set up and establish a secure SSH connection between a bastion server (public instance) and a private instance.
 
 ---
 ![AWS VPC Diagram](assets/image_01.png)
