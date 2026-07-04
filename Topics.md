@@ -21,7 +21,7 @@ Example: MySQL instance outbound to `0.0.0.0/0` on port 443 — for OS package u
 It's **"into this instance" vs "out of this instance"** — not "internet vs instance." Both inbound and outbound can be internet traffic, internal VPC traffic, or another instance entirely, depending on the source/destination you specify.
 
 **One more important detail — security groups are stateful:**
-If inbound allows something in, the **response traffic is automatically allowed out** — you don't need a matching outbound rule for replies. So when your bastion connects in in on port 22, MySQL-SG doesn't need an outbound rule to let the SSH *response* back out — that's automatic. Outbound rules only matter for traffic the instance itself *initiates* (like MySQL reaching out to yum servers).
+If inbound allows something in, the **response traffic is automatically allowed out** — you don't need a matching outbound rule for replies. So when your bastion connects in in on port 22, MySQL-SG doesn't need an outbound rule to let the SSH *response* back out — that's automatic. Outbound rules only matter for traffic the instance itself *initiates* (like MySQL reaching out to apt-server or yum-servers).
 
 **Quick way to think about it in your setup:**
 - Bastion-SG inbound (22, your IP) = "who can start an SSH session into the bastion"
