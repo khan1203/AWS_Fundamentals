@@ -258,10 +258,13 @@ The `10.0.0.0/16 → local` route exists in every route table in the VPC by defa
 | Private RT | `10.0.0.0/16 → local`, `0.0.0.0/0 → NAT Gateway` |
  
 **Security groups**
-| SG | Inbound | From |
-|---|---|---|
-| Bastion-SG | 22 | your IP |
-| MySQL-SG | 22, 3306 | Bastion-SG |
+| SG | Direction | Type | Protocol | Port | Source/Destination | Purpose |
+|---|---|---|---|---|---|---|
+| Bastion-SG | Inbound | SSH | TCP | 22 | Your IP (`x.x.x.x/32`) | Admin SSH access from your machine |
+| Bastion-SG | Outbound | All traffic | All | All | `0.0.0.0/0` | Allows SSH onward to MySQL-SG + general outbound (default allow-all) |
+| MySQL-SG | Inbound | SSH | TCP | 22 | Bastion-SG (by SG ID, not CIDR) | Allows bastion to jump into the instance |
+| MySQL-SG | Inbound | MySQL/Aurora | TCP | 3306 | Bastion-SG (or App-tier-SG if you add one later) | DB access, scoped to trusted sources only |
+| MySQL-SG | Outbound | All traffic | All | All | `0.0.0.0/0` | Needed for OS updates via NAT; can be tightened to just HTTPS (443) to package mirrors if you want least-privilege |
  
 **SSH (agent forwarding)**
 ```bash
