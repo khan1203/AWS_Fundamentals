@@ -23,6 +23,8 @@ Bastion → MySQL instance uses the **local route** (`10.0.0.0/16 → local`), w
 
 **The key distinction:** IGW and NAT handle traffic crossing the VPC boundary (to/from the internet). The local route handles traffic staying inside the VPC boundary (subnet-to-subnet). They're independent mechanisms — one can fail without affecting the other.
 
+![AWS VPC Diagram](assets/arch_2.2.png)
+
 ---
 
 ## 1. VPC & Networking
