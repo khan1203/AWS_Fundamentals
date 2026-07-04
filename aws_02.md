@@ -109,9 +109,12 @@ ssh ec2-user@10.0.2.x
 On the private MySQL instance:
 
 ```bash
+# Ubuntu
+sudo apt update && sudo apt install -y mysql-server
+
+# Amazon Linux 2/2023
 sudo yum update -y
-sudo yum install -y mysql-server   # Amazon Linux 2/2023
-# or: sudo apt update && sudo apt install -y mysql-server   # Ubuntu
+sudo yum install -y mysql-server                              
 ```
 
 ---
