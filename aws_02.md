@@ -5,8 +5,7 @@
 This guide deploys MySQL on a private EC2 instance, accessed only through a public bastion host, inside a custom VPC. MySQL is managed via `systemd` so it auto-starts on boot and restarts on failure.
 
 **Architecture**
-
-<img width="1440" height="1080" alt="image" src="https://github.com/user-attachments/assets/ff6daa79-c932-41b2-8e31-2f9b11326e10" />
+![AWS VPC Diagram](assets/arch_2.2.png)
 
 Here's the fuller picture of how traffic moves through this setup:
 
@@ -23,7 +22,7 @@ Bastion → MySQL instance uses the **local route** (`10.0.0.0/16 → local`), w
 
 **The key distinction:** IGW and NAT handle traffic crossing the VPC boundary (to/from the internet). The local route handles traffic staying inside the VPC boundary (subnet-to-subnet). They're independent mechanisms — one can fail without affecting the other.
 
-![AWS VPC Diagram](assets/arch_2.2.png)
+<img width="1440" height="1080" alt="image" src="https://github.com/user-attachments/assets/ff6daa79-c932-41b2-8e31-2f9b11326e10" />
 
 ---
 
