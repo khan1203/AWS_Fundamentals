@@ -27,3 +27,5 @@ If inbound allows something in, the **response traffic is automatically allowed 
 - Bastion-SG inbound (22, your IP) = "who can start an SSH session into the bastion"
 - MySQL-SG inbound (22/3306, Bastion-SG) = "who can start a session into MySQL" — scoped to the bastion only
 - MySQL-SG outbound (443/80, `0.0.0.0/0`) = "what MySQL is allowed to reach out to" — needed for updates via NAT, not for replying to the bastion's SSH
+
+## 2. 
