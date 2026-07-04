@@ -171,7 +171,7 @@ ssh ec2-user@10.0.1.x "systemctl is-active mysqld"
 
 ## 8. Validation Checklist
 
-- [ ] Bastion reachable via SSH from local machine (public RT + IGW)
+- [ ok ] Bastion reachable via SSH from local machine (public RT + IGW)
 - [ ] Private instance reachable from bastion only (local route, MySQL-SG allows Bastion-SG)
 - [ ] Private instance has outbound internet via NAT (test: `curl -I https://amazon.com`)
 - [ ] `systemctl status mysqld` shows `active (running)` and `enabled`
@@ -245,6 +245,54 @@ The `10.0.0.0/16 → local` route exists in every route table in the VPC by defa
 | VPC diagram doesn't match actual routes | CIDR typo, or a route added/removed outside the diagram's assumptions | Re-check actual route tables in console against the diagram — treat the console as source of truth |
  
 ---
+
+## 11. Quick Reference
+ 
+**Network layout**
+| Item | Value |
+|---|---|
+| VPC CIDR | 10.0.0.0/16 |
+| Public subnet | 10.0.0.0/24 (ap-southeast-1a) |
+| Private subnet | 10.0.1.0/24 (ap-southeast-1a) |
+| Public RT | `10.0.0.0/16 → local`, `0.0.0.0/0 → IGW` |
+| Private RT | `10.0.0.0/16 → local`, `0.0.0.0/0 → NAT Gateway` |
+ 
+**Security groups**
+| SG | Inbound | From |
+|---|---|---|
+| Bastion-SG | 22 | your IP |
+| MySQL-SG | 22, 3306 | Bastion-SG |
+ 
+**SSH (agent forwarding)**
+```bash
+chmod 400 bastion-key.pem
+eval "$(ssh-agent -s)"
+ssh-add bastion-key.pem
+ssh -A ec2-user@<bastion-public-ip>
+ssh ec2-user@10.0.1.x          # from inside bastion, no key needed
+```
+ 
+**MySQL install + systemd**
+```bash
+sudo yum install -y mysql-server
+sudo systemctl enable --now mysqld
+sudo systemctl status mysqld
+sudo mysql_secure_installation
+```
+ 
+**Fast diagnostics**
+```bash
+systemctl is-active mysqld              # is it running
+journalctl -xeu mysqld                  # why it failed
+curl -I https://amazon.com              # private instance internet check (via NAT)
+ip a                                    # confirm instance's actual private IP
+```
+ 
+**Golden rules**
+- Internet in/out → IGW. Private subnet's internet out → NAT. Subnet-to-subnet → local route. Three separate mechanisms.
+- No IGW route = no internet, regardless of public IP.
+- `systemctl enable` = survives reboot. `systemctl start` alone does not.
+- Blackhole route / stale console error → refresh, re-check target still exists.
 
 ## Key Takeaways
 
