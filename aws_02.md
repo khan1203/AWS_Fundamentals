@@ -110,7 +110,8 @@ On the private MySQL instance:
 
 ```bash
 # Ubuntu
-sudo apt update && sudo apt install -y mysql-server
+sudo apt update -y
+sudo apt install -y mysql-server
 
 # Amazon Linux 2/2023
 sudo yum update -y
