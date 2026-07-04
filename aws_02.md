@@ -117,6 +117,12 @@ sudo apt install -y mysql-server
 sudo yum update -y
 sudo yum install -y mysql-server                              
 ```
+Run the MySQL Secure Installation Script
+```bash
+sudo mysql_secure_installation                              
+```
+Follow the prompts to secure your MySQL installation (e.g., set root password, remove anonymous users, disallow root login remotely, remove test database, and reload privilege tables).
+
 
 ---
 
