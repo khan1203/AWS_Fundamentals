@@ -171,7 +171,7 @@ ssh ec2-user@10.0.1.x "systemctl is-active mysqld"
 
 ## 8. Validation Checklist
 
-- [ ok ] Bastion reachable via SSH from local machine (public RT + IGW)
+- [ ] Bastion reachable via SSH from local machine (public RT + IGW)
 - [ ] Private instance reachable from bastion only (local route, MySQL-SG allows Bastion-SG)
 - [ ] Private instance has outbound internet via NAT (test: `curl -I https://amazon.com`)
 - [ ] `systemctl status mysqld` shows `active (running)` and `enabled`
