@@ -132,7 +132,7 @@ sudo systemctl status mysqld
 
 If building a custom unit file (e.g. non-package install):
 ```bash
-sudo nano /etc/systemd/system/mysql.service
+sudo nano /etc/systemd/system/mysqld.service
 ```
 
 ```ini
