@@ -117,13 +117,6 @@ sudo apt install -y mysql-server
 sudo yum update -y
 sudo yum install -y mysql-server                              
 ```
-Run the MySQL Secure Installation Script
-```bash
-sudo mysql_secure_installation                              
-```
-Follow the prompts to secure your MySQL installation (e.g., set root password, remove anonymous users, disallow root login remotely, remove test database, and reload privilege tables).
-
-
 ---
 
 ## 6. Configure Systemd Service
@@ -138,22 +131,32 @@ sudo systemctl status mysqld
 ```
 
 If building a custom unit file (e.g. non-package install):
+```bash
+sudo nano /etc/systemd/system/mysql.service
+```
 
 ```ini
 # /etc/systemd/system/mysqld.service
 [Unit]
 Description=MySQL Server
+After=syslog.target
 After=network.target
 
 [Service]
 Type=simple
+PermissionsStartOnly=true
+ExecStartPre=/bin/mkdir -p /var/run/mysqld
+ExecStartPre=/bin/chown mysql:mysql -R /var/run/mysqld
+ExecStart=/usr/sbin/mysqld --basedir=/usr --datadir=/var/lib/mysql --plugin-dir=/usr/lib/mysql/plugin --log-error=/var/log/mysql/error.log --pid-file=/var/run/mysqld/mysqld.pid --socket=/var/run/mysqld/mysqld.sock --port=3306
+TimeoutSec=300
+PrivateTmp=true
 User=mysql
 Group=mysql
-ExecStart=/usr/sbin/mysqld
-Restart=on-failure
+WorkingDirectory=/usr
 
 [Install]
 WantedBy=multi-user.target
+
 ```
 
 ```bash
@@ -169,10 +172,12 @@ sudo systemctl enable --now mysqld
 sudo mysql_secure_installation
 mysql -u root -p -e "STATUS;"
 ```
+Follow the prompts to secure your MySQL installation (e.g., set root password, remove anonymous users, disallow root login remotely, remove test database, and reload privilege tables).
 
 Confirm auto-start:
 ```bash
 sudo reboot
+
 # after reboot, from bastion:
 ssh ec2-user@10.0.2.x "systemctl is-active mysqld"
 ```
