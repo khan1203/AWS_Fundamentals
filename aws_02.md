@@ -35,8 +35,8 @@ Bastion → MySQL instance uses the **local route** (`10.0.0.0/16 → local`), w
 ### 1.2 Create Subnets
 | Subnet | CIDR | AZ |
 |---|---|---|
-| Public | 10.0.0.0/24 | ap-southeast-1a |
-| Private | 10.0.1.0/24 | ap-southeast-1a |
+| Public | 10.0.1.0/24 | ap-southeast-1a |
+| Private | 10.0.2.0/24 | ap-southeast-1a |
 
 ### 1.3 Internet Gateway
 - Create IGW, attach to VPC.
@@ -99,7 +99,7 @@ ssh -A ec2-user@<bastion-public-ip>
 
 From inside bastion, jump to private instance (key never stored on bastion):
 ```bash
-ssh ec2-user@10.0.1.x
+ssh ec2-user@10.0.2.x
 ```
 
 ---
@@ -164,7 +164,7 @@ Confirm auto-start:
 ```bash
 sudo reboot
 # after reboot, from bastion:
-ssh ec2-user@10.0.1.x "systemctl is-active mysqld"
+ssh ec2-user@10.0.2.x "systemctl is-active mysqld"
 ```
 
 ---
@@ -252,8 +252,8 @@ The `10.0.0.0/16 → local` route exists in every route table in the VPC by defa
 | Item | Value |
 |---|---|
 | VPC CIDR | 10.0.0.0/16 |
-| Public subnet | 10.0.0.0/24 (ap-southeast-1a) |
-| Private subnet | 10.0.1.0/24 (ap-southeast-1a) |
+| Public subnet | 10.0.1.0/24 (ap-southeast-1a) |
+| Private subnet | 10.0.2.0/24 (ap-southeast-1a) |
 | Public RT | `10.0.0.0/16 → local`, `0.0.0.0/0 → IGW` |
 | Private RT | `10.0.0.0/16 → local`, `0.0.0.0/0 → NAT Gateway` |
  
@@ -272,7 +272,7 @@ chmod 400 bastion-key.pem
 eval "$(ssh-agent -s)"
 ssh-add bastion-key.pem
 ssh -A ec2-user@<bastion-public-ip>
-ssh ec2-user@10.0.1.x          # from inside bastion, no key needed
+ssh ec2-user@10.0.2.x                      # from inside bastion, no key needed
 ```
  
 **MySQL install + systemd**
