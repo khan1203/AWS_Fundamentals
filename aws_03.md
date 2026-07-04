@@ -247,7 +247,7 @@ ssh ec2-user@10.0.2.x "systemctl is-active mongod"
 ---
 
 
-## 11. Quick Reference
+## 9. Quick Reference
 
 **Network layout**
 | Item | Value |
