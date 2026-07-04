@@ -193,6 +193,7 @@ These two objects sit at fundamentally different layers of the network:
 - It's provisioned like a mini-instance: it gets an **ENI with a private IP from the subnet's CIDR**, and needs an Elastic IP attached to reach the internet itself.
 - It performs **many-to-one NAT (PAT)**: many private instances share the NAT Gateway's single public IP. To do that translation, traffic has to physically arrive *at* the NAT Gateway's ENI — which means it must live in a real subnet with a real route to the internet (the public subnet's `0.0.0.0/0 → IGW` route).
 - It's **AZ-scoped** — a NAT Gateway in `ap-southeast-1a` only serves traffic routed to it from route tables in that AZ (or wherever your private subnets route to it). For multi-AZ resilience, you need one NAT Gateway per AZ.
+
 **In short:** IGW is a stateless translation rule at the VPC boundary; NAT Gateway is a stateful, addressable device that must sit inside a subnet to receive and forward traffic like any other host.
  
 ### 9.2 IGW vs NAT Gateway — core differences
