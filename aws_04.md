@@ -9,14 +9,14 @@ Self-managing MySQL on EC2 (as in the earlier guide) is valuable for *learning* 
 
 ### Architecture
 
-<img width="1024" height="436" alt="image" src="https://github.com/user-attachments/assets/bb2f8946-9bab-48f9-bd28-99731dbcb2b8" />
+<img width="516" height="518" alt="image" src="https://github.com/user-attachments/assets/ff0b1ad9-d985-4fab-88c5-10f63e6c5a06" />
 
+.
 
 **Key structural difference from the EC2+systemd setup:** RDS doesn't need outbound internet access — AWS manages the instance itself, so there's no OS to patch or packages to fetch. That means the private subnets hosting RDS **don't require a NAT Gateway** at all, unless other private resources in those subnets need outbound access. This alone removes a cost line and a failure point compared to self-hosting.
 
 **Why RDS needs *two* private subnets, not one:**
 Amazon RDS requires a **DB Subnet Group** spanning at least two Availability Zones — even for a Single-AZ deployment, the subnet group itself must be multi-AZ so RDS can fail over into a standby AZ if you later enable Multi-AZ, or if AWS needs to replace underlying hardware.
-
 
 ## 1. VPC & Networking
 
@@ -48,9 +48,38 @@ Amazon RDS requires a **DB Subnet Group** spanning at least two Availability Zon
 > No NAT Gateway is required for this architecture unless you're also running other private EC2 resources that need outbound access.
 
 ### 1.5 DB Subnet Group
-- Create a DB Subnet Group in RDS console.
-- Add both Private A and Private B subnets.
-- This is a prerequisite for launching the RDS instance — you can't skip it.
+
+A DB Subnet Group is a named collection of subnets (spanning ≥2 AZs) that tells RDS *where in your VPC* it's allowed to place the database and its standby. You create this before launching the instance — RDS won't let you skip it, since it has no way to pick subnets on your own.
+
+**Step 1 — Confirm your subnets exist and are tagged correctly**
+Before opening the RDS console, verify Private A (10.0.2.0/24, AZ `a`) and Private B (10.0.3.0/24, AZ `b`) are already created from section 1.2, and that neither has a route to an IGW (they should only have the local route, per section 1.4). RDS doesn't enforce this, but placing the DB in a subnet with a public route defeats the purpose of `Publicly accessible: No` in section 3.2.
+
+**Step 2 — Open the DB Subnet Group creation screen**
+Console: RDS → **Subnet groups** (left sidebar, under "Databases") → **Create DB subnet group**.
+
+**Step 3 — Fill in the group details**
+| Field | Value |
+|---|---|
+| Name | `app-db-subnet-group` |
+| Description | e.g. "Private subnets for app-db-prod, spans AZ a and b" |
+| VPC | Your custom VPC from section 1.1 |
+
+**Step 4 — Add Availability Zones and subnets**
+- Under "Availability Zones", select both `ap-southeast-1a` and `ap-southeast-1b`. Selecting the AZ first is what makes its subnets selectable in the next dropdown.
+- Under "Subnets", select Private A (`10.0.2.0/24`) and Private B (`10.0.3.0/24`). If a subnet doesn't appear, it usually means its AZ wasn't selected above, or it belongs to a different VPC.
+
+**Step 5 — Create and verify**
+- Click **Create**. The group should show `Status: Complete` within a few seconds.
+- Verify via CLI:
+```bash
+aws rds describe-db-subnet-groups \
+  --db-subnet-group-name app-db-subnet-group \
+  --query "DBSubnetGroups[0].Subnets[*].[SubnetIdentifier,SubnetAvailabilityZone.Name]" \
+  --output table
+```
+You should see exactly two subnets listed, one per AZ. If only one appears, the group won't satisfy RDS's multi-AZ requirement and instance creation in section 3.2 will fail with a subnet group error.
+
+This group is referenced by name in section 3.2 (DB Subnet Group field) — nothing further to do with it until then.
 
 ---
 
@@ -75,19 +104,83 @@ Amazon RDS requires a **DB Subnet Group** spanning at least two Availability Zon
 - Key pair: `bastion-key.pem`
 
 ### 3.2 RDS MySQL Instance
-- Engine: MySQL (choose latest supported minor version)
-- Templates: Production (Multi-AZ) or Dev/Test (Single-AZ) depending on need
-- DB instance identifier: e.g. `app-db-prod`
-- Master username/password: set here, or let RDS manage via **Secrets Manager integration** (recommended)
-- Instance class: `db.t3.micro` (dev/test) or `db.t3.small`+ (light production)
-- Storage: gp3, start at 20 GB with storage autoscaling enabled
-- VPC: your custom VPC
-- DB Subnet Group: the one created in step 1.5
-- Public access: **No** — this is the entire point of the private-subnet design
-- VPC security group: RDS-SG
-- Multi-AZ deployment: enable for production (automatic standby + failover)
-- Backup retention: 7 days minimum for production
-- Enable automated backups and enhanced monitoring as needed
+
+This walks through the RDS console's "Create database" wizard end to end. Every field below maps to a specific decision — skipping one silently defaults to something you may not want (e.g. public access defaults to "Yes" if you're not careful).
+
+**Step 1 — Open the wizard**
+Console: RDS → **Databases** → **Create database**.
+
+**Step 2 — Choose a creation method**
+Select **Standard create** (not "Easy create") — this exposes the subnet group, SG, and public-access fields the "Easy create" path hides behind defaults.
+
+**Step 3 — Engine options**
+| Field | Value |
+|---|---|
+| Engine type | MySQL |
+| Engine version | Latest supported minor version (e.g. 8.0.x) — avoid pinning to an old minor unless a driver/compatibility issue requires it |
+
+**Step 4 — Templates**
+Choose **Production** for Multi-AZ + provisioned IOPS defaults, or **Dev/Test** for a cheaper Single-AZ baseline. This only pre-fills later fields — everything it sets can still be overridden manually below.
+
+**Step 5 — Settings**
+| Field | Value |
+|---|---|
+| DB instance identifier | `app-db-prod` |
+| Master username | e.g. `admin` |
+| Credentials management | Select **Manage master credentials in AWS Secrets Manager** (recommended) instead of self-managed — this avoids a plaintext password ever existing in the console or in your notes |
+
+**Step 6 — Instance configuration**
+| Field | Value |
+|---|---|
+| DB instance class | `db.t3.micro` for dev/test, `db.t3.small` or larger for light production |
+
+**Step 7 — Storage**
+| Field | Value |
+|---|---|
+| Storage type | gp3 |
+| Allocated storage | Start at 20 GB |
+| Storage autoscaling | Enable, set a sensible max (e.g. 100 GB) so a runaway table doesn't silently balloon your bill |
+
+**Step 8 — Connectivity (the section that determines network isolation)**
+| Field | Value |
+|---|---|
+| Compute resource | Don't connect to an EC2 compute resource (connect via bastion/app tier instead) |
+| VPC | Your custom VPC from section 1.1 |
+| DB subnet group | `app-db-subnet-group` created in section 1.5 |
+| Public access | **No** — this is the entire point of the private-subnet design; double-check this field specifically, since it's the most common misconfiguration in this wizard |
+| VPC security group | Choose existing → `RDS-SG` (remove the default SG AWS pre-selects) |
+| Availability Zone | No preference (let RDS choose, unless you have a reason to pin it) |
+| Database port | 3306 (default) |
+
+**Step 9 — Multi-AZ**
+Under "Availability & durability", enable **Multi-AZ DB instance** for production. This provisions a synchronous standby in the second subnet from your DB Subnet Group and handles automatic failover — this is why section 1.5's two-subnet requirement exists in the first place.
+
+**Step 10 — Backup**
+| Field | Value |
+|---|---|
+| Automated backups | Enable |
+| Backup retention period | 7 days minimum for production |
+| Backup window | Default (or a low-traffic window if you know one) |
+
+**Step 11 — Encryption**
+Enable **encryption at rest**. This can only be set at creation time — enabling it later requires taking a snapshot, copying it with encryption enabled, and restoring from that copy, so decide now.
+
+**Step 12 — Additional configuration**
+- Initial database name (optional, creates an empty schema on first boot)
+- Enable **Enhanced monitoring** if you want OS-level metrics beyond the default CloudWatch basics
+- Leave "Deletion protection" enabled for anything beyond a throwaway dev instance
+
+**Step 13 — Create and wait**
+Click **Create database**. Status moves from `Creating` → `Backing up` → `Available`, typically 5-10 minutes for Single-AZ, longer for Multi-AZ. Don't attempt to connect until status is `Available`.
+
+**Step 14 — Verify from the CLI**
+```bash
+aws rds describe-db-instances \
+  --db-instance-identifier app-db-prod \
+  --query "DBInstances[0].[DBInstanceStatus,PubliclyAccessible,MultiAZ,DBSubnetGroup.DBSubnetGroupName]" \
+  --output table
+```
+Confirm `PubliclyAccessible` reads `False` and `DBSubnetGroupName` matches `app-db-subnet-group` — these are the two fields most worth double-checking after creation, since fixing them retroactively (especially public access) can require a reboot or a new instance.
 
 ---
 
