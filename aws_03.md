@@ -251,43 +251,6 @@ mysql -h <endpoint> -u admin -p -e "STATUS;"                          # connecti
 
 ---
 
-## 10. Concept Clarification
-
-### 10.1 Why doesn't the private subnet need a NAT Gateway here?
-
-In the EC2+systemd lab, the private instance needed NAT to reach the internet for OS package updates (`yum`/`apt`). **RDS has no OS you manage** — AWS handles the underlying patching entirely. The RDS instance never needs to initiate outbound internet connections, so the private subnets hosting it can stay fully isolated with just the `local` route. This is a direct cost and attack-surface reduction versus self-hosting.
-
-### 10.2 EC2+systemd vs RDS — core differences
-
-| | EC2 + systemd (self-managed) | RDS (managed) |
-|---|---|---|
-| **OS patching** | Your responsibility | AWS-managed |
-| **DB engine patching** | Your responsibility (`yum update`) | AWS-managed maintenance windows |
-| **Backups** | Manual (cron + `mysqldump`, or snapshots you script) | Automated, point-in-time recovery built in |
-| **Failover** | None, unless you build it yourself | Multi-AZ automatic failover (~60-120s) |
-| **Config changes** | Edit `my.cnf` directly | DB Parameter Groups (some require reboot) |
-| **Scaling storage** | Manual EBS resize + filesystem resize | Storage autoscaling, no downtime |
-| **NAT Gateway needed** | Yes, for OS/package updates | No — RDS has no outbound requirement |
-| **SSH access to the DB host** | Yes (it's a real EC2 instance) | No — RDS instances aren't SSH-accessible at all |
-| **Cost model** | EC2 instance cost only | RDS instance cost is higher per hour, but offsets ops labor |
-| **When to use** | Learning, exotic requirements, extreme cost sensitivity at scale | Default for production unless you have a specific reason not to |
-
-### 10.3 Other common points of confusion
-
-**"Why can't I SSH into my RDS instance to check logs?"**
-RDS instances aren't accessible as EC2 hosts at all — there's no OS shell. Logs are available via the RDS console (Logs & events) or CloudWatch Logs, and metrics via CloudWatch/Enhanced Monitoring, not `journalctl`.
-
-**"I changed a parameter but nothing happened."**
-Check the parameter's `ApplyType`. `dynamic` parameters take effect immediately; `static` parameters require `apply-immediately` **and** a reboot to actually take effect — changing the parameter group alone isn't enough.
-
-**"My app can't connect even though the security group looks right."**
-Confirm `Publicly accessible` is set correctly for your use case (should be `No` here), and that you're connecting from something *inside* the VPC (bastion/app tier) — RDS with `Publicly accessible: No` will refuse connections from outside the VPC entirely, regardless of security group rules.
-
-**"Should Multi-AZ replace my backups?"**
-No — Multi-AZ is for **availability** (fast failover if the primary AZ has an outage), not for **backup/recovery**. You still need automated backups/snapshots for point-in-time recovery from data corruption, accidental deletes, or application bugs. They solve different problems.
-
----
-
 ## Key Takeaways
 
 - RDS removes OS/engine patching, backup scripting, and failover engineering from your responsibilities — that's the entire value proposition.
