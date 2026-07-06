@@ -12,6 +12,9 @@ A three-tier design exists to scale and stay available under load — that requi
 
 ### Architecture
 
+<img width="1687" height="1100" alt="image" src="https://github.com/user-attachments/assets/98776c2c-2f0f-4b06-8a13-b5b97c535314" />
+.
+
 Traffic flows strictly downward through the tiers, never sideways or skipping a tier:
 
 **Inbound request path**
