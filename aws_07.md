@@ -129,17 +129,16 @@ Note the pattern: every SG rule references another **security group ID** as its 
 ---
 
 ## 3. Launch Resources
-
+ 
 ### 3.1 Bastion Host
 - Subnet: Public A
 - Auto-assign public IP: enabled
 - SG: Bastion-SG
 - Key pair: `bastion-key.pem`
-
 ### 3.2 Application Load Balancer
-
+ 
 The ALB is the single public entry point for the whole VPC — nothing else in this design accepts inbound traffic from the internet.
-
+ 
 **Step 1 — Create the target group first**
 The wizard for creating an ALB asks for a target group before it lets you finish, so create it first to avoid the wizard state resetting.
 - Console: EC2 → Target groups → Create target group.
@@ -148,7 +147,6 @@ The wizard for creating an ALB asks for a target group before it lets you finish
 - VPC: this VPC.
 - Health check path: `/health` (or your app's actual health endpoint) — an ALB with a health check pointed at a path that doesn't exist will mark every target unhealthy and silently 502 all traffic, so confirm this path is real before moving on.
 - Name: `web-tier-tg`.
-
 **Step 2 — Create the load balancer**
 - Console: EC2 → Load Balancers → Create load balancer → **Application Load Balancer**.
 - Name: `app-alb`.
@@ -156,14 +154,11 @@ The wizard for creating an ALB asks for a target group before it lets you finish
 - IP address type: IPv4.
 - VPC: this VPC.
 - Mappings: select Public A and Public B — the wizard blocks you from proceeding with only one subnet, which is the ALB enforcing the two-AZ requirement mentioned in the Overview.
-
 **Step 3 — Configure listeners**
 - Listener 1: HTTP:80 → forward to `web-tier-tg`.
 - If you have a certificate, add Listener 2: HTTPS:443 → forward to `web-tier-tg`, and optionally change Listener 1 to redirect HTTP → HTTPS instead of forwarding directly.
-
 **Step 4 — Security group**
 - Attach ALB-SG (from section 2) — remove the default SG the wizard pre-selects.
-
 **Step 5 — Create and verify**
 - Click **Create load balancer**. Status moves `Provisioning` → `Active`, usually within a couple of minutes.
 - Verify from the CLI:
@@ -174,7 +169,7 @@ aws elbv2 describe-load-balancers \
   --output table
 ```
 Confirm `State.Code` is `active` and both Public A and Public B subnet IDs appear.
-
+ 
 **Step 6 — Confirm target health once instances exist**
 This step depends on 3.3 being done first — come back to it after launching web tier instances:
 ```bash
@@ -184,34 +179,179 @@ aws elbv2 describe-target-health \
   --output table
 ```
 `healthy` means the ALB's health check is succeeding against that instance's health check path; `unhealthy` almost always traces back to either the wrong port in the target group, Web-SG not allowing inbound from ALB-SG, or the health check path returning a non-2xx response.
-
+ 
 ### 3.3 Web Tier (Presentation)
-
-- Launch template: AMI with your web server (NGINX/reverse proxy) pre-baked or bootstrapped via user data.
-- Subnet placement: Web A, Web B (via an Auto Scaling Group, not launched directly — so instances spread across both AZs automatically).
-- Auto Scaling Group: min 2, desired 2, max 4 (adjust to load) — target group: `web-tier-tg` from 3.2, so the ASG registers/deregisters instances with the ALB automatically as it scales.
-- SG: Web-SG.
-- Auto-assign public IP: disabled — this tier is private; all inbound traffic arrives via the ALB, never directly.
-
+ 
+The web tier is never launched as standalone instances — it's a Launch Template plus an Auto Scaling Group, so instances are created, replaced, and spread across AZs automatically rather than by hand.
+ 
+**Step 1 — Prepare the AMI (optional but recommended)**
+Launch a temporary EC2 instance in Web A, install and configure your web server (NGINX/reverse proxy), verify it serves traffic correctly on the port your target group expects (e.g. 8080), then Console: EC2 → Instances → select instance → Actions → Image → **Create image**. Name it `web-tier-ami-v1`. Terminate the temporary instance once the image status shows `available` — this bakes configuration in rather than repeating it in user data on every boot.
+ 
+If you'd rather bootstrap at boot instead of baking an AMI, skip to step 2 and put the install/config commands in the user data field there — either approach works, baking is faster to boot and easier to audit, user data is faster to iterate on while you're still tuning the config.
+ 
+**Step 2 — Create the launch template**
+- Console: EC2 → Launch Templates → Create launch template.
+- Name: `web-tier-lt`.
+- AMI: `web-tier-ami-v1` from step 1, or a base Ubuntu/Amazon Linux AMI if bootstrapping via user data.
+- Instance type: `t3.micro` (dev/test) or `t3.small`+ depending on expected load.
+- Key pair: same as the bastion key, or a separate one — needed for the SSH debugging path in section 4, not for normal operation.
+- Security group: `Web-SG` from section 2.
+- Network settings: do **not** set "Auto-assign public IP" to enabled here — leave it at the subnet default, and confirm Web A/B have "Auto-assign public IP" disabled at the subnet level (set when the subnets were created in 1.2). A launch template can't override a stricter subnet-level setting, but it can accidentally request a public IP if the subnet allows it, so this is worth checking once.
+- User data (if not using a pre-baked AMI): a shell script that installs and starts your web server on boot, e.g.:
+```bash
+#!/bin/bash
+apt update -y
+apt install -y nginx
+systemctl enable --now nginx
+```
+- Advanced details → IAM instance profile: attach one only if the web tier needs AWS API access (e.g. reading a config from S3 or Secrets Manager) — not required for a plain reverse proxy.
+**Step 3 — Confirm the target group is ready**
+Reuse `web-tier-tg` created in section 3.2. Double check its health check path matches what your web server actually serves — this is the same target group the ASG will register instances into automatically in step 5.
+ 
+**Step 4 — Create the Auto Scaling Group**
+- Console: EC2 → Auto Scaling Groups → Create Auto Scaling group.
+- Name: `web-tier-asg`.
+- Launch template: `web-tier-lt` from step 2.
+- VPC: this VPC.
+- Subnets: select **both** Web A and Web B — this is what makes the ASG spread instances across AZs; selecting only one defeats the two-AZ design from the Overview.
+- Attach to an existing load balancer target group: select `web-tier-tg` — this single setting is what wires the ASG into the ALB from 3.2, so newly launched instances register automatically and terminated ones deregister automatically, with no manual target group management ever needed.
+- Health checks: enable **ELB health checks** in addition to the default EC2 health checks. EC2 health checks only catch a crashed instance; ELB health checks catch an instance that's running but failing to serve traffic (e.g. NGINX up but misconfigured) — without this, the ASG won't replace an instance that's alive but broken.
+- Group size: minimum 2, desired 2, maximum 4 (adjust to expected load — minimum 2 is what actually guarantees both AZs stay covered, since a minimum of 1 could let the ASG consolidate everything into a single AZ).
+**Step 5 — Add a scaling policy**
+- On the same wizard (or afterward via Auto Scaling Groups → your group → Automatic scaling): add a **target tracking scaling policy**.
+- Metric: Average CPU utilization (a reasonable default for a web tier; switch to ALB request count per target if your workload is more I/O-bound than CPU-bound).
+- Target value: 50% — the ASG adds instances above this and removes them below it, within the min/max bounds from step 4.
+**Step 6 — Launch and verify**
+- Click **Create Auto Scaling group**. Instances should appear within a minute or two, spread across Web A and Web B.
+- Verify placement and health:
+```bash
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names web-tier-asg \
+  --query "AutoScalingGroups[0].Instances[*].[InstanceId,AvailabilityZone,HealthStatus,LifecycleState]" \
+  --output table
+```
+Confirm instances appear in both `ap-southeast-1a` and `ap-southeast-1b`, `HealthStatus` is `Healthy`, and `LifecycleState` is `InService`.
+ 
+- Then confirm the ALB sees them as healthy (this reuses the command from section 3.2, step 6):
+```bash
+aws elbv2 describe-target-health \
+  --target-group-arn <web-tier-tg-arn> \
+  --query "TargetHealthDescriptions[*].[Target.Id,TargetHealth.State]" \
+  --output table
+```
+If EC2/ASG shows `Healthy` but the target group shows `unhealthy`, the instance itself is fine but Web-SG, the health check path, or the health check port is misconfigured — that combination narrows the problem to the ALB-to-instance path specifically, not the instance itself.
+ 
 ### 3.4 App Tier (Application)
-
-- Launch template: AMI with your app/API server (e.g. FastAPI) pre-baked or bootstrapped via user data.
-- Subnet placement: App A, App B via Auto Scaling Group.
-- Auto Scaling Group: min 2, desired 2, max 4.
-- SG: App-SG.
-- Auto-assign public IP: disabled.
-- Reachable only from Web-SG, per the security group chain in section 2 — there's no ALB in front of this tier in the minimal version of this design; the web tier calls app tier instances directly (e.g. via an internal ALB or service discovery, which is a good next lab once this VPC skeleton is working).
-
+ 
+Same launch-template-plus-ASG pattern as the web tier, with one structural difference: there's no ALB in front of this tier in the minimal version of this design, so the web tier reaches app instances directly by private IP or a simple internal DNS record, not through a target group.
+ 
+**Step 1 — Prepare the AMI**
+Launch a temporary instance in App A, install your app/API server (e.g. FastAPI + Uvicorn), confirm it serves on its port (e.g. 8000), then Console: EC2 → Instances → Actions → Image → **Create image**. Name it `app-tier-ami-v1`. Terminate the temporary instance.
+ 
+**Step 2 — Create the launch template**
+- Console: EC2 → Launch Templates → Create launch template.
+- Name: `app-tier-lt`.
+- AMI: `app-tier-ami-v1`.
+- Instance type: `t3.small`+ (API workloads typically need more headroom than a reverse proxy).
+- Security group: `App-SG` from section 2.
+- Network settings: leave "Auto-assign public IP" unset — confirm App A/B have it disabled at the subnet level, same check as the web tier.
+- User data (if not baking the AMI):
+```bash
+#!/bin/bash
+apt update -y
+apt install -y python3-pip
+pip3 install fastapi uvicorn
+# start your app, e.g. via a systemd unit installed alongside it
+```
+ 
+**Step 3 — Create the Auto Scaling Group**
+- Console: EC2 → Auto Scaling Groups → Create Auto Scaling group.
+- Name: `app-tier-asg`.
+- Launch template: `app-tier-lt`.
+- Subnets: App A **and** App B.
+- Load balancer: skip attaching one for the minimal design — leave "No load balancer target groups" selected. If you later add an internal ALB or NLB between web and app tiers (recommended once this skeleton works), attach its target group here instead.
+- Health checks: EC2 health checks are sufficient without a load balancer in front; add ELB health checks later if you introduce an internal load balancer.
+- Group size: minimum 2, desired 2, maximum 4 — minimum 2 to keep both AZs populated, same reasoning as the web tier.
+**Step 4 — Add a scaling policy**
+Target tracking on Average CPU utilization, target value 50%, same as the web tier — adjust the metric to request latency or queue depth if your app tier is more I/O-bound than CPU-bound.
+ 
+**Step 5 — Give the web tier a way to find app tier instances**
+Without a load balancer, the web tier needs *some* stable way to reach app instances that come and go as the ASG scales. Two options at this lab stage:
+- Simplest for production: a private Route 53 hosted zone record (e.g. `app.internal`) pointing at app tier instance IPs, updated via a small Lambda triggered by ASG lifecycle hooks.
+- Easiest to stand up right now: query the ASG directly when needed:
+```bash
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names app-tier-asg \
+  --query "AutoScalingGroups[0].Instances[*].InstanceId" --output text \
+  | xargs -n1 -I{} aws ec2 describe-instances --instance-ids {} \
+    --query "Reservations[0].Instances[0].PrivateIpAddress" --output text
+```
+Either is a placeholder — an internal ALB (the same pattern as 3.2, applied a second time between tiers) is the production-grade version and worth doing as a follow-up once the rest of the VPC is verified working.
+ 
+**Step 6 — Launch and verify**
+```bash
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names app-tier-asg \
+  --query "AutoScalingGroups[0].Instances[*].[InstanceId,AvailabilityZone,HealthStatus,LifecycleState]" \
+  --output table
+```
+Confirm instances appear in both AZs and are `InService`. Then confirm reachability from the web tier specifically, not just from the bastion (which bypasses the SG chain):
+```bash
+ssh ubuntu@10.0.11.x "curl -I http://10.0.21.x:8000/health"
+```
+This should succeed. A plain curl from your local machine to that same private IP should fail entirely, confirming the app tier has no path in except through the chain.
+ 
 ### 3.5 Data Tier (Back-End)
-
-- Use a managed service here rather than self-hosted EC2 — RDS (MySQL/Postgres) or DocumentDB (MongoDB-compatible), per the earlier guides in this series.
-- DB Subnet Group: Data A, Data B.
-- SG: Data-SG.
-- Public access: No.
-- No NAT route needed on `private-data-rt` for a managed service, per section 1.5.
-
+ 
+Use a managed service here rather than self-hosted EC2 — RDS (MySQL/Postgres) or DocumentDB (MongoDB-compatible). This section only covers wiring a managed service into *this* VPC's data tier; the full creation wizard for each engine is already covered step-by-step in the earlier guides in this series.
+ 
+**Step 1 — Create the subnet group**
+- RDS: RDS → Subnet groups → Create DB subnet group. DocumentDB: DocumentDB → Subnet groups → Create.
+- Name: `data-tier-subnet-group`.
+- VPC: this VPC.
+- Subnets: Data A and Data B — not Web or App subnets. Selecting the wrong subnet group here is the most common way this tier ends up reachable from the wrong place, since the subnet group (not the security group) determines which subnets the database's network interfaces actually live in.
+**Step 2 — Create the database/cluster**
+Follow the "Standard create" (RDS) or "Create cluster" (DocumentDB) wizard from the earlier guides, with these fields set specifically for this VPC:
+| Field | Value |
+|---|---|
+| VPC | This VPC |
+| Subnet group | `data-tier-subnet-group` from step 1 |
+| Security group | `Data-SG` from section 2 — remove any default SG the wizard pre-selects |
+| Public access (RDS only) | No |
+ 
+**Step 3 — Verify network placement before doing anything else**
+```bash
+# RDS
+aws rds describe-db-instances \
+  --db-instance-identifier <your-db-id> \
+  --query "DBInstances[0].[DBSubnetGroup.DBSubnetGroupName,PubliclyAccessible,VpcSecurityGroups]" \
+  --output table
+ 
+# DocumentDB
+aws docdb describe-db-clusters \
+  --db-cluster-identifier <your-cluster-id> \
+  --query "DBClusters[0].[DBSubnetGroup,VpcSecurityGroups]" \
+  --output table
+```
+Confirm the subnet group matches `data-tier-subnet-group` and the security group list contains only `Data-SG`, not a default SG left over from the wizard.
+ 
+**Step 4 — Confirm no outbound route exists**
+```bash
+aws ec2 describe-route-tables \
+  --filters "Name=association.subnet-id,Values=<data-a-subnet-id>" \
+  --query "RouteTables[0].Routes[*].[DestinationCidrBlock,GatewayId,NatGatewayId]" \
+  --output table
+```
+Should show only the local `10.0.0.0/16` route — no `nat-*` or `igw-*` entries, per section 1.5. A managed service doesn't need one; if you added one anyway, remove it.
+ 
+**Step 5 — Verify reachability from the app tier only**
+```bash
+ssh ubuntu@10.0.21.x "curl -I <data-tier-endpoint>:<db-port>"   # from an app tier instance — should succeed
+ssh ubuntu@10.0.11.x "timeout 3 curl -I <data-tier-endpoint>:<db-port>"   # from a web tier instance — should time out
+```
+The second command timing out is the actual proof the security group chain from section 2 is doing its job — App-SG is the only source Data-SG allows, and Web-SG has no rule granting it access even though the local route makes the subnets network-reachable.
+ 
 ---
-
 ## 4. SSH Access (Agent Forwarding)
 
 On local machine:
