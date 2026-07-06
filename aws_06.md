@@ -9,8 +9,6 @@ Self-managing MongoDB on EC2 means you own OS patching, replica set configuratio
 
 ### Architecture
 
-<img width="1024" height="668" alt="image" src="https://github.com/user-attachments/assets/46602122-3bbf-457d-89ce-b0eefb8ef200" />
-
 A DocumentDB deployment is a **cluster**, not a single instance: one cluster has one primary instance (read/write) and zero or more replica instances (read-only), each of which can live in a different AZ for high availability and read scaling. The underlying storage volume is shared and automatically replicated across three AZs regardless of how many compute instances you add — this is different from RDS's Multi-AZ toggle, which provisions a separate standby.
 
 **Key structural similarity to RDS:** like RDS, DocumentDB has no OS for you to manage, so private subnets hosting it don't need a NAT Gateway unless other private resources in the same subnets need outbound internet.
