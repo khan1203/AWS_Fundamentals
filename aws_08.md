@@ -2,7 +2,7 @@
 
 ## Overview
 
-This guide deploys a Node.js application behind an **Nginx Layer 4 (TCP) load balancer**, backed by a shared MySQL instance, inside a two-tier VPC in `ap-southeast-1`.
+This document outlines the process of setting up a **Layer 4 (TCP) load balancer** application environment using Nginx, consisting of two identical Node.js applications, backed by a shared MySQL instance, inside a two-tier VPC in `ap-southeast-1`.
 
 **Architecture:**
 <img width="985" height="500" alt="image" src="https://github.com/user-attachments/assets/16815a17-991d-4a3f-bef5-5edda0f33e7b" />
@@ -163,58 +163,143 @@ This command creates and runs a MySQL database container with specified database
 We need to set inbound security-group to give access on port 3306.
 
 ## 7. Node.js App Setup (10.0.2.10 and 10.0.2.11 — identical steps on both)
-
+ 
 ```bash
 sudo apt update && sudo apt install -y nodejs npm
 mkdir ~/app && cd ~/app
 npm init -y
-npm install express mysql2
+npm install express mysql2 body-parser
 ```
-
+ 
 `server.js`:
-
+ 
 ```javascript
 const express = require('express');
-const mysql = require('mysql2/promise');
+const mysql = require('mysql2');
+const bodyParser = require('body-parser');
 const app = express();
-
-const pool = mysql.createPool({
+const port = process.env.PORT;
+ 
+const dbConfig = {
   host: '10.0.2.12',
   user: 'appuser',
   password: '<strong-password>',
   database: 'appdb'
+};
+ 
+app.use(bodyParser.json());
+ 
+function createConnection() {
+  const connection = mysql.createConnection(dbConfig);
+  connection.connect(error => {
+    if (error) {
+      console.error('Error connecting to the database:', error);
+      return null;
+    }
+    console.log('Connected to MySQL database');
+  });
+  return connection;
+}
+ 
+function createTable() {
+  const connection = createConnection();
+  if (connection) {
+    const createTableQuery = `
+      CREATE TABLE IF NOT EXISTS users (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) NOT NULL UNIQUE
+      )
+    `;
+    connection.query(createTableQuery, (error, results) => {
+      connection.end();
+      if (error) {
+        console.error('Error creating table:', error);
+      } else {
+        console.log('Table "users" ensured to exist');
+      }
+    });
+  }
+}
+ 
+// Ensure the table is created when the server starts
+createTable();
+ 
+app.get('/', (req, res) => {
+  const connection = createConnection();
+  if (connection) {
+    res.status(200).json({ message: `Hello, from Node App on PORT: ${port} ! Connected to MySQL database.` });
+    connection.end();
+  } else {
+    res.status(500).json({ message: 'Failed to connect to MySQL database' });
+  }
 });
-
-app.get('/', async (req, res) => {
-  const [rows] = await pool.query('SELECT NOW() AS time');
-  res.send(`Served by ${require('os').hostname()} — DB time: ${rows[0].time}`);
+ 
+app.get('/users', (req, res) => {
+  const connection = createConnection();
+  if (connection) {
+    connection.query('SELECT * FROM users', (error, results) => {
+      connection.end();
+      if (error) {
+        return res.status(500).json({ message: 'Error fetching users', error });
+      }
+      res.json(results);
+    });
+  } else {
+    res.status(500).json({ message: 'Failed to connect to MySQL database' });
+  }
 });
-
-app.listen(3000, () => console.log('Listening on 3000'));
+ 
+app.post('/users', (req, res) => {
+  const connection = createConnection();
+  const { name, email } = req.body;
+  if (!name || !email) {
+    return res.status(400).json({ message: 'Name and email are required' });
+  }
+  if (connection) {
+    const query = 'INSERT INTO users (name, email) VALUES (?, ?)';
+    connection.query(query, [name, email], (error, results) => {
+      connection.end();
+      if (error) {
+        return res.status(500).json({ message: 'Error adding user', error });
+      }
+      res.status(201).json({ message: 'User added', userId: results.insertId });
+    });
+  } else {
+    res.status(500).json({ message: 'Failed to connect to MySQL database' });
+  }
+});
+ 
+app.listen(port, () => {
+  console.log(`App running on port :${port}`);
+});
 ```
-
+ 
+Since `port` comes from `process.env.PORT`, it must be set in the environment before the process starts — the systemd unit below sets it explicitly. A new connection is opened and closed per request here rather than pooled; fine at lab scale, but worth switching to `mysql2/promise` with a connection pool before this sees real traffic.
+ 
 Systemd unit `/etc/systemd/system/nodeapp.service`:
-
+ 
 ```ini
 [Unit]
 Description=Node app
 After=network.target
-
+ 
 [Service]
+Environment=PORT=3000
 ExecStart=/usr/bin/node /home/ubuntu/app/server.js
 Restart=always
 User=ubuntu
-
+ 
 [Install]
 WantedBy=multi-user.target
 ```
-
+ 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable nodeapp
 sudo systemctl start nodeapp
 ```
-
+ 
 Repeat identically on Node2 — the only difference between the two instances is the hostname in the response, which is how you'll visually confirm load balancing in Section 9.
 
 ## 8. Nginx L4 Load Balancer Setup (10.0.1.14)
