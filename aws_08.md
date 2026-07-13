@@ -1,0 +1,281 @@
+# Nginx Layer-4 Load Balancing on Node.js + MySQL with AWS VPC
+
+## Overview
+
+This lab deploys a Node.js application behind an **Nginx Layer 4 (TCP) load balancer**, backed by a shared MySQL instance, inside a two-tier VPC in `ap-southeast-1`.
+
+**Architecture:**
+<img width="985" height="500" alt="image" src="https://github.com/user-attachments/assets/16815a17-991d-4a3f-bef5-5edda0f33e7b" />
+
+| Component | Subnet | CIDR | Role |
+|---|---|---|---|
+| VPC | — | `10.0.0.0/16` | Regional container |
+| public_subnet | AZ-a | `10.0.1.0/24` | Internet-facing tier |
+| private_subnet | AZ-a | `10.0.2.0/24` | App + data tier |
+
+- **NAT Gateway** (public_subnet) — outbound internet for private instances (package installs, updates)
+- **Nginx EC2** `10.0.1.14` (public_subnet) — L4 TCP load balancer, single public entry point
+- **Node1 EC2** `10.0.2.10`, **Node2 EC2** `10.0.2.11` (private_subnet) — identical Node.js app instances
+- **MySQL EC2** `10.0.2.12` (private_subnet) — shared database, not directly reachable from the internet
+
+**Traffic flow:**
+
+```
+Client → IGW → Nginx (10.0.1.14:80) → [stream module: round robin]
+                                          ├─→ Node1 (10.0.2.10:3000) → MySQL (10.0.2.12:3306)
+                                          └─→ Node2 (10.0.2.11:3000) → MySQL (10.0.2.12:3306)
+```
+
+**Why Layer 4, not Layer 7:** Nginx's `stream` module operates at the TCP level — it forwards raw byte streams between client and upstream without parsing HTTP headers, cookies, or paths. This means:
+- No host/path-based routing, no header rewriting, no HTTP-aware health checks
+- Lower CPU/memory overhead per connection — nginx isn't buffering or inspecting payloads
+- Works for any TCP protocol, not just HTTP (this lab happens to proxy HTTP traffic, but the LB itself is protocol-agnostic)
+
+This is the right tradeoff when you need simple round-robin distribution across identical app instances and don't need L7 features. Node1 and Node2 are stateless and interchangeable — session state, if any, must live in MySQL or a shared cache, not in-process.
+
+---
+
+## 1. VPC and Subnets
+
+| Resource | CIDR | AZ | Auto-assign public IP |
+|---|---|---|---|
+| VPC | `10.0.0.0/16` | ap-southeast-1 | — |
+| public_subnet | `10.0.1.0/24` | ap-southeast-1a | Yes |
+| private_subnet | `10.0.2.0/24` | ap-southeast-1a | No |
+
+```bash
+aws ec2 create-vpc --cidr-block 10.0.0.0/16
+aws ec2 create-subnet --vpc-id <vpc-id> --cidr-block 10.0.1.0/24 --availability-zone ap-southeast-1a
+aws ec2 create-subnet --vpc-id <vpc-id> --cidr-block 10.0.2.0/24 --availability-zone ap-southeast-1a
+aws ec2 modify-subnet-attribute --subnet-id <public-subnet-id> --map-public-ip-on-launch
+```
+
+## 2. Internet Gateway, NAT Gateway, Routing
+
+```bash
+aws ec2 create-internet-gateway
+aws ec2 attach-internet-gateway --vpc-id <vpc-id> --internet-gateway-id <igw-id>
+
+aws ec2 allocate-address --domain vpc
+aws ec2 create-nat-gateway --subnet-id <public-subnet-id> --allocation-id <eip-alloc-id>
+```
+
+| Route Table | Destination | Target |
+|---|---|---|
+| Public RT | `10.0.0.0/16` | local |
+| Public RT | `0.0.0.0/0` | igw |
+| Private RT | `10.0.0.0/16` | local |
+| Private RT | `0.0.0.0/0` | nat-gateway |
+
+Associate public RT with public_subnet, private RT with private_subnet. NAT Gateway must show `Available` before private instances can reach package repos — this is the same dependency that caused blackholed routes in the Docker Compose lab if the NAT was deleted before instances finished pulling images.
+
+## 3. Security Groups
+
+**nginx-sg** (attached to Nginx EC2):
+
+| Direction | Protocol | Port | Source/Destination |
+|---|---|---|---|
+| Inbound | TCP | 22 | Your admin IP |
+| Inbound | TCP | 80 | `0.0.0.0/0` |
+| Outbound | TCP | 3000 | node-sg |
+| Outbound | TCP | 22 | node-sg (SSH passthrough to private nodes) |
+
+**node-sg** (attached to Node1, Node2):
+
+| Direction | Protocol | Port | Source/Destination |
+|---|---|---|---|
+| Inbound | TCP | 3000 | nginx-sg |
+| Inbound | TCP | 22 | nginx-sg |
+| Outbound | TCP | 3306 | mysql-sg |
+| Outbound | TCP | 443/80 | `0.0.0.0/0` (via NAT, for npm installs) |
+
+**mysql-sg** (attached to MySQL EC2):
+
+| Direction | Protocol | Port | Source/Destination |
+|---|---|---|---|
+| Inbound | TCP | 3306 | node-sg |
+| Inbound | TCP | 22 | nginx-sg |
+| Outbound | TCP | 443/80 | `0.0.0.0/0` (via NAT, for apt updates) |
+
+Chaining by SG ID (not CIDR) keeps this correct even if instances are replaced with new private IPs.
+
+## 4. Launch Instances
+
+| Instance | Subnet | Private IP | AMI | Type |
+|---|---|---|---|---|
+| Nginx | public_subnet | 10.0.1.14 | Ubuntu 22.04 | t3.micro |
+| Node1 | private_subnet | 10.0.2.10 | Ubuntu 22.04 | t3.micro |
+| Node2 | private_subnet | 10.0.2.11 | Ubuntu 22.04 | t3.micro |
+| MySQL | private_subnet | 10.0.2.12 | Ubuntu 22.04 | t3.small |
+
+Launch each with `--private-ip-address` pinned to the values above so the nginx upstream config and app connection strings are known ahead of time.
+
+## 5. SSH Access to Private Instances
+
+Nginx EC2 doubles as the jump host (no separate bastion in this topology). Use agent forwarding so private keys never touch the Nginx instance:
+
+```bash
+eval $(ssh-agent)
+ssh-add ~/.ssh/lab-key.pem
+
+ssh -A ubuntu@<nginx-public-ip>
+# from inside Nginx EC2:
+ssh ubuntu@10.0.2.10   # Node1
+ssh ubuntu@10.0.2.11   # Node2
+ssh ubuntu@10.0.2.12   # MySQL
+```
+
+Agent forwarding is a convenience that keeps the key off the jump host — the actual connection to the private subnet is permitted by the implicit local VPC route plus the `node-sg`/`mysql-sg` rules allowing SSH from `nginx-sg`, not by NAT (NAT is outbound-to-internet only).
+
+## 6. MySQL Setup (10.0.2.12)
+
+```bash
+sudo apt update && sudo apt install -y mysql-server
+sudo systemctl enable mysql
+sudo systemctl start mysql
+```
+
+Bind to the private interface and create the app database/user:
+
+```bash
+sudo sed -i 's/127.0.0.1/0.0.0.0/' /etc/mysql/mysql.conf.d/mysqld.cnf
+sudo systemctl restart mysql
+
+sudo mysql -e "
+CREATE DATABASE appdb;
+CREATE USER 'appuser'@'10.0.2.%' IDENTIFIED BY '<strong-password>';
+GRANT ALL PRIVILEGES ON appdb.* TO 'appuser'@'10.0.2.%';
+FLUSH PRIVILEGES;"
+```
+
+`systemctl enable` is required here — `start` alone will not survive a reboot.
+
+## 7. Node.js App Setup (10.0.2.10 and 10.0.2.11 — identical steps on both)
+
+```bash
+sudo apt update && sudo apt install -y nodejs npm
+mkdir ~/app && cd ~/app
+npm init -y
+npm install express mysql2
+```
+
+`server.js`:
+
+```javascript
+const express = require('express');
+const mysql = require('mysql2/promise');
+const app = express();
+
+const pool = mysql.createPool({
+  host: '10.0.2.12',
+  user: 'appuser',
+  password: '<strong-password>',
+  database: 'appdb'
+});
+
+app.get('/', async (req, res) => {
+  const [rows] = await pool.query('SELECT NOW() AS time');
+  res.send(`Served by ${require('os').hostname()} — DB time: ${rows[0].time}`);
+});
+
+app.listen(3000, () => console.log('Listening on 3000'));
+```
+
+Systemd unit `/etc/systemd/system/nodeapp.service`:
+
+```ini
+[Unit]
+Description=Node app
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/node /home/ubuntu/app/server.js
+Restart=always
+User=ubuntu
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable nodeapp
+sudo systemctl start nodeapp
+```
+
+Repeat identically on Node2 — the only difference between the two instances is the hostname in the response, which is how you'll visually confirm load balancing in Section 9.
+
+## 8. Nginx L4 Load Balancer Setup (10.0.1.14)
+
+The `stream` module ships separately from core nginx on Ubuntu:
+
+```bash
+sudo apt update && sudo apt install -y nginx libnginx-mod-stream
+```
+
+Add a `stream` block at the top level of `/etc/nginx/nginx.conf` (outside and alongside the existing `http {}` block — `stream` cannot be nested inside `http`):
+
+```nginx
+stream {
+    upstream node_backend {
+        server 10.0.2.10:3000;
+        server 10.0.2.11:3000;
+    }
+
+    server {
+        listen 80;
+        proxy_pass node_backend;
+        proxy_connect_timeout 2s;
+    }
+}
+```
+
+```bash
+sudo nginx -t
+sudo systemctl enable nginx
+sudo systemctl restart nginx
+```
+
+Note: since `listen 80` is now claimed by the `stream` block, remove or move any default `http` server block also listening on 80 to avoid a bind conflict.
+
+## 9. Verification
+
+```bash
+# From your local machine — confirm round-robin distribution
+for i in {1..6}; do curl -s http://<nginx-public-ip>/; echo; done
+```
+
+You should see the hostname alternate between Node1 and Node2 responses.
+
+**Validation checklist:**
+
+- [ ] NAT Gateway state = `Available`
+- [ ] Private RT default route points to NAT Gateway, public RT to IGW
+- [ ] `nginx -t` passes with no syntax errors
+- [ ] `systemctl is-enabled nginx/nodeapp/mysql` returns `enabled` on all four instances
+- [ ] Repeated curls to Nginx public IP alternate between Node1 and Node2 hostnames
+- [ ] Node1/Node2 can independently reach MySQL: `mysql -h 10.0.2.12 -u appuser -p appdb`
+- [ ] MySQL instance has no public IP and is unreachable from the internet
+- [ ] Killing `nodeapp` on one node (`sudo systemctl stop nodeapp`) causes nginx to route all traffic to the surviving node without dropping the LB itself
+
+## 10. Quick Reference
+
+| Item | Value |
+|---|---|
+| VPC CIDR | 10.0.0.0/16 |
+| Public subnet | 10.0.1.0/24 |
+| Private subnet | 10.0.2.0/24 |
+| Nginx | 10.0.1.14 : 80 (public), listens via stream module |
+| Node1 / Node2 | 10.0.2.10 / 10.0.2.11 : 3000 |
+| MySQL | 10.0.2.12 : 3306 |
+| LB config file | /etc/nginx/nginx.conf (stream block) |
+| LB method | round robin (default; no directive needed) |
+
+## Key Takeaways
+
+- `stream` is nginx's L4 module — it proxies TCP/UDP connections without HTTP awareness, unlike `proxy_pass` inside an `http` block (L7)
+- The `stream` block sits at the same nesting level as `http` in `nginx.conf`, not inside it
+- Round robin is the nginx upstream default; no load-balancing method directive is required unless you want `least_conn` or `ip_hash`
+- Node1/Node2 must be stateless for round robin to work correctly — any session state belongs in MySQL, not in the Node process
+- Same SG-chaining and NAT/route-table dependencies from earlier labs apply: nginx-sg → node-sg → mysql-sg by SG reference, private subnet reaches the internet only via NAT
+- `systemctl enable` on all three services (mysql, nodeapp, nginx) is required for reboot persistence
