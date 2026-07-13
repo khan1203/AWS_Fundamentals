@@ -129,26 +129,36 @@ Agent forwarding is a convenience that keeps the key off the jump host — the a
 
 ## 6. MySQL Setup (10.0.2.12)
 
+Connect to mysql instance install Docker and run the following command to run mysql database container:
 ```bash
-sudo apt update && sudo apt install -y mysql-server
-sudo systemctl enable mysql
-sudo systemctl start mysql
+docker run \
+  --name my_mysql \
+  -e MYSQL_ROOT_PASSWORD=root \
+  -e MYSQL_DATABASE=my_db \
+  -e MYSQL_USER=my_user \
+  -e MYSQL_PASSWORD=my_password \
+  -p 3306:3306 \
+  -v mysql_data:/var/lib/mysql \
+  -d mysql:latest
 ```
 
-Bind to the private interface and create the app database/user:
+This command is creating a mySQL container with:
 
 ```bash
-sudo sed -i 's/127.0.0.1/0.0.0.0/' /etc/mysql/mysql.conf.d/mysqld.cnf
-sudo systemctl restart mysql
-
-sudo mysql -e "
-CREATE DATABASE appdb;
-CREATE USER 'appuser'@'10.0.2.%' IDENTIFIED BY '<strong-password>';
-GRANT ALL PRIVILEGES ON appdb.* TO 'appuser'@'10.0.2.%';
-FLUSH PRIVILEGES;"
+--name my_mysql                  # Container name
+-e MYSQL_ROOT_PASSWORD=root      # Root password
+-e MYSQL_DATABASE=my_db          # Create a database named my_db
+-e MYSQL_USER=my_user            # Create a new user
+-e MYSQL_PASSWORD=my_password    # Password for the new user
+-p 3306:3306                     # Map host port 3306 to container port 3306
+-v mysql_data:/var/lib/mysql     # Persist MySQL data in a Docker volume
+-d                               # Run in detached mode
+mysql:latest                     # MySQL image
 ```
 
-`systemctl enable` is required here — `start` alone will not survive a reboot.
+This command creates and runs a MySQL database container with specified database, user, and password and volume mounting for persistent storage, accessible externally on port 3306.
+
+We need to set inbound security-group to give access on port 3306.
 
 ## 7. Node.js App Setup (10.0.2.10 and 10.0.2.11 — identical steps on both)
 
