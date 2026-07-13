@@ -101,12 +101,12 @@ Chaining by SG ID (not CIDR) keeps this correct even if instances are replaced w
 
 ## 4. Launch Instances
 
-| Instance | Subnet | Private IP | AMI | Type |
-|---|---|---|---|---|
-| Nginx | public_subnet | 10.0.1.14 | Ubuntu 22.04 | t3.micro |
-| Node1 | private_subnet | 10.0.2.10 | Ubuntu 22.04 | t3.micro |
-| Node2 | private_subnet | 10.0.2.11 | Ubuntu 22.04 | t3.micro |
-| MySQL | private_subnet | 10.0.2.12 | Ubuntu 22.04 | t3.small |
+| Instance | Subnet | Private IP | AMI | Type | Security Group |
+|---|---|---|---|---|---|
+| Nginx | public_subnet | 10.0.1.14 | Ubuntu 22.04 | t3.micro | nginx-sg |
+| Node1 | private_subnet | 10.0.2.10 | Ubuntu 22.04 | t3.micro | node-sg |
+| Node2 | private_subnet | 10.0.2.11 | Ubuntu 22.04 | t3.micro | node-sg |
+| MySQL | private_subnet | 10.0.2.12 | Ubuntu 22.04 | t3.small | mysql-sg |
 
 Launch each with `--private-ip-address` pinned to the values above so the nginx upstream config and app connection strings are known ahead of time.
 
@@ -115,10 +115,12 @@ Launch each with `--private-ip-address` pinned to the values above so the nginx 
 Nginx EC2 doubles as the jump host (no separate bastion in this topology). Use agent forwarding so private keys never touch the Nginx instance:
 
 ```bash
+chmod 400 key.pem
 eval $(ssh-agent)
-ssh-add ~/.ssh/lab-key.pem
+ssh-add key.pem
 
 ssh -A ubuntu@<nginx-public-ip>
+
 # from inside Nginx EC2:
 ssh ubuntu@10.0.2.10   # Node1
 ssh ubuntu@10.0.2.11   # Node2
