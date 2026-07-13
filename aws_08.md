@@ -239,11 +239,34 @@ sudo systemctl restart nginx
 Note: since `listen 80` is now claimed by the `stream` block, remove or move any default `http` server block also listening on 80 to avoid a bind conflict.
 
 ## 9. Verification
-
-```bash
-# From your local machine — confirm round-robin distribution
-for i in {1..6}; do curl -s http://<nginx-public-ip>/; echo; done
+ 
+**1. Basic load balancer check**
+ 
+Visit `http://<nginx-public-ip>` in a browser. You should get a response from one of the Node apps (`Served by <hostname> — DB time: ...`).
+ 
+**2. `/users` endpoints**
+ 
+- `GET http://<nginx-public-ip>/users` — fetch all users
+- `POST http://<nginx-public-ip>/users` — add a new user
+POST body (JSON):
+ 
+```json
+{
+  "name": "John Doe",
+  "email": "john@example.com"
+}
 ```
+ 
+Using Postman for the `POST`: set method to `POST`, URL to `http://<nginx-public-ip>/users`, Body → raw → JSON, paste the payload above, and send. You should get back a `201` with the new user's `id` and the hostname of whichever node handled the request.
+ 
+Then confirm the write landed by immediately issuing a `GET` to `http://<nginx-public-ip>/users` — the new user should appear in the returned list regardless of which node serves the GET, since both nodes read from the same MySQL instance (10.0.2.12).
+ 
+**3. Confirm load balancing across requests**:
+
+
+Refresh the browser or make multiple requests to observe the load balancing in action. You should see responses alternating between Node-app-1 and Node-app-2 running on different ports:
+<img width="1038" height="257" alt="image" src="https://github.com/user-attachments/assets/ede16040-a6ee-4232-a903-ddb70b0fc76d" />
+<img width="933" height="214" alt="image" src="https://github.com/user-attachments/assets/cca212ff-3290-42d8-95b5-d1652bd66891" />
 
 You should see the hostname alternate between Node1 and Node2 responses.
 
