@@ -2,7 +2,7 @@
 
 ## Overview
 
-This lab deploys a Node.js application behind an **Nginx Layer 4 (TCP) load balancer**, backed by a shared MySQL instance, inside a two-tier VPC in `ap-southeast-1`.
+This guide deploys a Node.js application behind an **Nginx Layer 4 (TCP) load balancer**, backed by a shared MySQL instance, inside a two-tier VPC in `ap-southeast-1`.
 
 **Architecture:**
 <img width="985" height="500" alt="image" src="https://github.com/user-attachments/assets/16815a17-991d-4a3f-bef5-5edda0f33e7b" />
