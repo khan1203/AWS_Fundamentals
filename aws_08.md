@@ -26,7 +26,8 @@ Client → IGW → Nginx (10.0.1.14:80) → [stream module: round robin]
                                           └─→ Node2 (10.0.2.11:3000) → MySQL (10.0.2.12:3306)
 ```
 
-**Why Layer 4, not Layer 7:** Nginx's `stream` module operates at the TCP level — it forwards raw byte streams between client and upstream without parsing HTTP headers, cookies, or paths. This means:
+### 💯 **Why Layer 4, not Layer 7:** 
+Nginx's `stream` module operates at the TCP level — it forwards raw byte streams between client and upstream without parsing HTTP headers, cookies, or paths. This means:
 - No host/path-based routing, no header rewriting, no HTTP-aware health checks
 - Lower CPU/memory overhead per connection — nginx isn't buffering or inspecting payloads
 - Works for any TCP protocol, not just HTTP (this lab happens to proxy HTTP traffic, but the LB itself is protocol-agnostic)
@@ -34,6 +35,19 @@ Client → IGW → Nginx (10.0.1.14:80) → [stream module: round robin]
 This is the right tradeoff when you need simple round-robin distribution across identical app instances and don't need L7 features. Node1 and Node2 are stateless and interchangeable — session state, if any, must live in MySQL or a shared cache, not in-process.
 
 ---
+## AWS Setup
+
+At first, we need to create a VPC in AWS, configure subnet, route tables and gateway.
+
+- Firstly, Create a VPC named my-vpc.
+- Secondly, Create 2 subnets: public-subnet and private-subnet in my-vpc.
+- Then, Create necessary internet gateway (igw), NAT gateways (nat)
+- After that, Create route tables: public-RT, private-RT
+- Then, Create and configure the required security-groups
+
+The `resource-map` of our VPC should be as follows:
+
+<img width="1572" height="394" alt="image" src="https://github.com/user-attachments/assets/1267e4c6-b1bd-4855-b47a-2aabdbd0e2bc" />
 
 ## 1. VPC and Subnets
 
@@ -43,22 +57,7 @@ This is the right tradeoff when you need simple round-robin distribution across 
 | public_subnet | `10.0.1.0/24` | ap-southeast-1a | Yes |
 | private_subnet | `10.0.2.0/24` | ap-southeast-1a | No |
 
-```bash
-aws ec2 create-vpc --cidr-block 10.0.0.0/16
-aws ec2 create-subnet --vpc-id <vpc-id> --cidr-block 10.0.1.0/24 --availability-zone ap-southeast-1a
-aws ec2 create-subnet --vpc-id <vpc-id> --cidr-block 10.0.2.0/24 --availability-zone ap-southeast-1a
-aws ec2 modify-subnet-attribute --subnet-id <public-subnet-id> --map-public-ip-on-launch
-```
-
 ## 2. Internet Gateway, NAT Gateway, Routing
-
-```bash
-aws ec2 create-internet-gateway
-aws ec2 attach-internet-gateway --vpc-id <vpc-id> --internet-gateway-id <igw-id>
-
-aws ec2 allocate-address --domain vpc
-aws ec2 create-nat-gateway --subnet-id <public-subnet-id> --allocation-id <eip-alloc-id>
-```
 
 | Route Table | Destination | Target |
 |---|---|---|
@@ -66,6 +65,7 @@ aws ec2 create-nat-gateway --subnet-id <public-subnet-id> --allocation-id <eip-a
 | Public RT | `0.0.0.0/0` | igw |
 | Private RT | `10.0.0.0/16` | local |
 | Private RT | `0.0.0.0/0` | nat-gateway |
+
 
 Associate public RT with public_subnet, private RT with private_subnet. NAT Gateway must show `Available` before private instances can reach package repos — this is the same dependency that caused blackholed routes in the Docker Compose lab if the NAT was deleted before instances finished pulling images.
 
@@ -98,6 +98,7 @@ Associate public RT with public_subnet, private RT with private_subnet. NAT Gate
 | Outbound | TCP | 443/80 | `0.0.0.0/0` (via NAT, for apt updates) |
 
 Chaining by SG ID (not CIDR) keeps this correct even if instances are replaced with new private IPs.
+
 
 ## 4. Launch Instances
 
@@ -167,7 +168,7 @@ We need to set inbound security-group to give access on port 3306.
  
 ```bash
 sudo apt update && sudo apt install -y nodejs npm
-mkdir ~/app && cd ~/app
+mkdir node-app-1 && cd node-app-1
 npm init -y
 npm install express mysql2 body-parser
 ```
@@ -184,7 +185,7 @@ const port = process.env.PORT;
 const dbConfig = {
   host: '10.0.2.12',
   user: 'appuser',
-  password: '<strong-password>',
+  password: 'pass1212',
   database: 'appdb'
 };
  
@@ -276,8 +277,17 @@ app.listen(port, () => {
 });
 ```
  
-Since `port` comes from `process.env.PORT`, it must be set in the environment before the process starts — the systemd unit below sets it explicitly. A new connection is opened and closed per request here rather than pooled; fine at lab scale, but worth switching to `mysql2/promise` with a connection pool before this sees real traffic.
- 
+Run it directly first to confirm it works before wiring up systemd:
+
+
+```bash
+export PORT=5001
+node server.js
+```
+
+(Use PORT=5000 on Node1 and PORT=5001 on Node2, or whatever pair you prefer — just make sure the nginx upstream block in Section 8 points at the same ports.)
+
+**(Optional for now)**
 Systemd unit `/etc/systemd/system/nodeapp.service`:
  
 ```ini
@@ -286,7 +296,7 @@ Description=Node app
 After=network.target
  
 [Service]
-Environment=PORT=3000
+EnvironmentFile=/etc/nodeapp/nodeapp.env
 ExecStart=/usr/bin/node /home/ubuntu/app/server.js
 Restart=always
 User=ubuntu
@@ -301,23 +311,33 @@ sudo systemctl enable nodeapp
 sudo systemctl start nodeapp
 ```
  
-Repeat identically on Node2 — the only difference between the two instances is the hostname in the response, which is how you'll visually confirm load balancing in Section 9.
+Repeat identically on Node2: the only difference between the two instances is the hostname in the response, which is how you'll visually confirm load balancing in Section 9.
 
 ## 8. Nginx L4 Load Balancer Setup (10.0.1.14)
 
-The `stream` module ships separately from core nginx on Ubuntu:
+Now, connect to the nginx instance and create a `nginx.conf` file and a `Dockerfile`. We also need to install Docker.
 
+
+Install nginx:
 ```bash
 sudo apt update && sudo apt install -y nginx libnginx-mod-stream
 ```
-
-Add a `stream` block at the top level of `/etc/nginx/nginx.conf` (outside and alongside the existing `http {}` block — `stream` cannot be nested inside `http`):
-
+```
+mkdir Nginx
+cd Nginx
+```
+Create `nginx.conf` in the Nginx directory with the following configuration:
+```
+touch nginx.conf
+```
+Paste this configuration:
 ```nginx
+events {}
+
 stream {
     upstream node_backend {
-        server 10.0.2.10:3000;
-        server 10.0.2.11:3000;
+        server 10.0.2.10:5001;
+        server 10.0.2.11:5002;
     }
 
     server {
@@ -328,13 +348,35 @@ stream {
 }
 ```
 
-```bash
-sudo nginx -t
-sudo systemctl enable nginx
-sudo systemctl restart nginx
+`NB:` **Replace the pubic ip of nodejs app according to your ec2 instances.**
+
+This configuration sets up Nginx to act as a TCP load balancer, distributing traffic between the two Node.js applications. Let's break down the key components:
+
+`stream {}` This block is used for TCP and UDP load balancing. It's different from the http {} block used in HTTP load balancing. It allows it to handle TCP and UDP traffic at the transport layer (Layer 4) of the OSI model.
+
+`upstream nodejs_backend {}` This defines a group of backend servers. We're using host.docker.internal to refer to the host machine from within the Docker container. The ports 5001 and 5002 correspond to our two Node.js applications.
+
+`server {}` This block defines the server configuration for the load balancer. listen 80: This tells Nginx to listen on port 80 for incoming TCP connections.
+
+This configuration provides a simple round-robin load balancing across our Node.js applications at the TCP level, which can be more efficient than HTTP-level load balancing for certain use cases.
+
+### Create & Configure Dockerfile for Nginx
+
+Create a file named Dockerfile in the Nginx directory with the following content:
+```
+FROM nginx:latest
+COPY nginx.conf /etc/nginx/nginx.conf
 ```
 
-Note: since `listen 80` is now claimed by the `stream` block, remove or move any default `http` server block also listening on 80 to avoid a bind conflict.
+Build Nginx Docker Image with our custom configuration:
+```
+docker build -t custom-nginx .
+```
+Run Nginx Container having our custom configuration:
+```
+docker run -d -p 80:80 --name my_nginx custom-nginx
+```
+
 
 ## 9. Verification
  
@@ -350,8 +392,8 @@ POST body (JSON):
  
 ```json
 {
-  "name": "John Doe",
-  "email": "john@example.com"
+  "name": "Rifat Khan",
+  "email": "khan1212@gmail.com"
 }
 ```
  
