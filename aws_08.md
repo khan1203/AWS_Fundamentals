@@ -1,4 +1,4 @@
-# Nginx Layer-4 Load Balancing on Node.js + MySQL with AWS VPC
+# Nginx L4 Load Balancing on Node.js + MySQL with AWS VPC
 
 ## Overview
 
