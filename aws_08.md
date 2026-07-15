@@ -114,6 +114,7 @@ Launch each with `--private-ip-address` pinned to the values above so the nginx 
 
 Nginx EC2 doubles as the jump host (no separate bastion in this topology). Use agent forwarding so private keys never touch the Nginx instance:
 
+Open Terminal in the directory where key.pem remains:
 ```bash
 chmod 400 key.pem
 eval $(ssh-agent)
