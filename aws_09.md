@@ -97,40 +97,49 @@ Associate public RT with public_subnet, private RT with private_subnet. NAT Gate
 
 **nginx-sg** (attached to Nginx EC2):
 
-| Direction | Protocol | Port | Source/Destination |
+| Direction | Type | Port | Source/Destination |
 |---|---|---|---|
-| Inbound | TCP | 22 | Your admin IP |
-| Inbound | TCP | 80 | `0.0.0.0/0` |
-| Outbound | TCP | 5001, 5002 | node-sg |
-| Outbound | TCP | 22 | node-sg (SSH passthrough to private nodes) |
+| Inbound | SSH | 22 | Your admin IP |
+| Inbound | HTTP | 80 | `0.0.0.0/0` |
+| Inbound | HTTPS | 443 | `0.0.0.0/0` |
+| Outbound | Custom TCP | 5001, 5002 | node-sg |
+| Outbound | SSH | 22 | node-sg (SSH passthrough to private nodes) |
+| Outbound | SSH | 22 | mysql-sg (SSH passthrough to private nodes) |
+
+To get `admin ip` run in your terminal:
+```
+curl ifconfig.me
+```
 
 **node-sg** (attached to Node1, Node2):
 
-| Direction | Protocol | Port | Source/Destination |
+| Direction | Type | Port | Source/Destination |
 |---|---|---|---|
-| Inbound | TCP | 5001, 5002 | nginx-sg |
-| Inbound | TCP | 22 | nginx-sg |
-| Outbound | TCP | 3306 | mysql-sg |
-| Outbound | TCP | 443/80 | `0.0.0.0/0` (via NAT, for npm installs) |
+| Inbound | Custom TCP | 5001, 5002 | nginx-sg |
+| Inbound | SSH | 22 | nginx-sg |
+| Outbound | MySQL/Aurora | 3306 | mysql-sg |
+| Outbound | HTTP | 80 | `0.0.0.0/0` (via NAT, for npm installs) |
+| Outbound | HTTPS | 443 | `0.0.0.0/0` (via NAT, for npm installs) |
 
 **mysql-sg** (attached to MySQL EC2):
 
-| Direction | Protocol | Port | Source/Destination |
+| Direction | Type | Port | Source/Destination |
 |---|---|---|---|
-| Inbound | TCP | 3306 | node-sg |
-| Inbound | TCP | 22 | nginx-sg |
-| Outbound | TCP | 443/80 | `0.0.0.0/0` (via NAT, for apt updates) |
+| Inbound | MySQL/Aurora | 3306 | node-sg |
+| Inbound | SSH | 22 | nginx-sg |
+| Outbound | HTTP | 80 | `0.0.0.0/0` (via NAT, for apt updates) |
+| Outbound | HTTPS | 443 | `0.0.0.0/0` (via NAT, for apt updates) |
 
 The only real difference from the L4 guide's security groups is that ports 5001/5002 are now referenced explicitly since Node1 and Node2 run on distinct ports — nginx's `http` upstream block needs to reach both by name and port, same as `stream` did.
 
 ## 4. Launch Instances
 
-| Instance | Subnet | Private IP | AMI | Type | Security Group |
-|---|---|---|---|---|---|
-| Nginx | public_subnet | 10.0.1.14 | Ubuntu 22.04 | t3.micro | nginx-sg |
-| Node1 | private_subnet | 10.0.2.10 | Ubuntu 22.04 | t3.micro | node-sg |
-| Node2 | private_subnet | 10.0.2.11 | Ubuntu 22.04 | t3.micro | node-sg |
-| MySQL | private_subnet | 10.0.2.12 | Ubuntu 22.04 | t3.small | mysql-sg |
+| Instance | Subnet | AMI | Type | Security Group |
+|---|---|---|---|---|
+| Nginx | public_subnet | Ubuntu 22.04 | t3.micro | nginx-sg |
+| Node1 | private_subnet | Ubuntu 22.04 | t3.micro | node-sg |
+| Node2 | private_subnet | Ubuntu 22.04 | t3.micro | node-sg |
+| MySQL | private_subnet | Ubuntu 22.04 | t3.small | mysql-sg |
 
 ## 5. SSH Access to Private Instances
 
@@ -144,22 +153,28 @@ ssh-add key.pem
 ssh -A ubuntu@<nginx-public-ip>
 
 # from inside Nginx EC2:
-ssh ubuntu@10.0.2.10   # Node1
-ssh ubuntu@10.0.2.11   # Node2
-ssh ubuntu@10.0.2.12   # MySQL
+ssh ubuntu@10.0.2.x   # Node1
+ssh ubuntu@10.0.2.x   # Node2
+ssh ubuntu@10.0.2.x   # MySQL
 ```
 
 ## 6. MySQL Setup (10.0.2.12)
 
-Connect to the MySQL instance, install Docker, and run the database container:
+From Ngnix EC2, connect to the MySQL instance; install Docker and run the database container:
+
+```
+ssh ubuntu@10.0.2.x          # Enter into MySQL EC2
+sudo apt update
+sudo apt install docker.io
+```
 
 ```bash
-docker run \
-  --name my_mysql \
+sudo docker run \
+  --name mysql-cont \
   -e MYSQL_ROOT_PASSWORD=root \
-  -e MYSQL_DATABASE=my_db \
-  -e MYSQL_USER=my_user \
-  -e MYSQL_PASSWORD=my_password \
+  -e MYSQL_DATABASE=appdb \
+  -e MYSQL_USER=appuser \
+  -e MYSQL_PASSWORD=pass1212 \
   -p 3306:3306 \
   -v mysql_data:/var/lib/mysql \
   -d mysql:latest
@@ -171,7 +186,7 @@ We need to set the inbound security group to allow access on port 3306 from `nod
 
 ```bash
 sudo apt update && sudo apt install -y nodejs npm
-mkdir node-app-1 && cd node-app-1
+mkdir nodeapp && cd nodeapp
 npm init -y
 npm install express mysql2 body-parser
 ```
@@ -183,10 +198,10 @@ const express = require('express');
 const mysql = require('mysql2');
 const bodyParser = require('body-parser');
 const app = express();
-const port = process.env.PORT;
+const port = process.env.PORT || 5000;
 
 const dbConfig = {
-  host: '10.0.2.12',
+  host: '<mysql-instance-private-ip>',
   user: 'appuser',
   password: 'pass1212',
   database: 'appdb'
