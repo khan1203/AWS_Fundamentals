@@ -352,8 +352,8 @@ events {}
 
 http {
     upstream node_backend {
-        server 10.0.2.10:5001;
-        server 10.0.2.11:5002;
+        server 10.0.2.x:5001;  # Node-1
+        server 10.0.2.x:5002;  # Node-2
     }
 
     server {
