@@ -165,7 +165,7 @@ From Ngnix EC2, connect to the MySQL instance; install Docker and run the databa
 ```
 ssh ubuntu@10.0.2.x          # Enter into MySQL EC2
 sudo apt update
-sudo apt install docker.io
+sudo apt install docker.io docker-compose-plugin
 ```
 
 ```bash
@@ -306,33 +306,7 @@ export PORT=5001
 node server.js
 ```
 
-(Use `PORT=5000` on Node1 and `PORT=5001` on Node2, or whatever pair you prefer — just make sure the nginx `upstream` block in Section 8 points at the same ports.)
-
-**(Optional for now)**
-Systemd unit `/etc/systemd/system/nodeapp.service`:
-
-```ini
-[Unit]
-Description=Node app
-After=network.target
-
-[Service]
-EnvironmentFile=/etc/nodeapp/nodeapp.env
-ExecStart=/usr/bin/node /home/ubuntu/app/server.js
-Restart=always
-User=ubuntu
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable nodeapp
-sudo systemctl start nodeapp
-```
-
-Repeat identically on Node2: the only difference between the two instances is the port and the hostname in the response, which is how you'll visually confirm load balancing in Section 9.
+(Use `PORT=5001` on Node1 and `PORT=5002` on Node2, or whatever pair you prefer — just make sure the nginx `upstream` block in Section 8 points at the same ports.)
 
 ## 8. Nginx L7 Load Balancer Setup (10.0.1.14)
 
@@ -342,7 +316,7 @@ Connect to the Nginx instance and create an `nginx.conf` file and a `Dockerfile`
 sudo apt update && sudo apt install -y nginx
 mkdir Nginx
 cd Nginx
-touch nginx.conf
+nano nginx.conf
 ```
 
 Paste this configuration:
@@ -383,20 +357,70 @@ This configuration sets up Nginx to act as an HTTP reverse proxy, distributing r
 - `proxy_set_header` directives exist only in the `http` module — this is where the real client IP gets forwarded as `X-Forwarded-For`, which the app now logs.
 - `proxy_next_upstream` defines what counts as a failure worth retrying on a different upstream — an HTTP-aware concept that doesn't exist in `stream`.
 
-### Create & Configure Dockerfile for Nginx
-
+#### Create the Dockerfile
+ 
+```bash
+nano Dockerfile
 ```
+ 
+Paste:
+ 
+```dockerfile
 FROM nginx:latest
 COPY nginx.conf /etc/nginx/nginx.conf
 ```
-
-Build and run:
-
+ 
+Save and exit: `Ctrl+O`, `Enter`, `Ctrl+X`
+ 
+#### Verify directory contents
+ 
+```bash
+ls -la
+```
+ 
+#### Build the image
+ 
 ```bash
 docker build -t custom-nginx-l7 .
+```
+ 
+#### Verify the image was built
+ 
+```bash
+docker images
+```
+ 
+#### Run the container
+ 
+```bash
 docker run -d -p 80:80 --name my_nginx_l7 custom-nginx-l7
 ```
+ 
+#### Verify the container is running
+ 
+```bash
+docker ps
+```
+ 
+#### Check container logs
+ 
+```bash
+docker logs my_nginx_l7
+```
+ 
+#### Confirm nginx.conf took effect inside the container
+ 
+```bash
+docker exec -it my_nginx_l7 cat /etc/nginx/nginx.conf
+```
+ 
+#### Test from the host/machine
+ 
+```bash
+curl http://localhost               # host
+curl http://<Nginx-EC2-public-ip>   # machine
 
+```
 ## 9. Verification
 
 **1. Basic load balancer check**
@@ -430,7 +454,10 @@ Using Postman for the `POST`: set method to `POST`, URL to `http://<nginx-public
 **4. Confirm load balancing across requests**
 
 Refresh the browser or make multiple requests to observe the load balancing in action. You should see responses alternating between Node-app-1 and Node-app-2 running on different ports:
+
 <img width="1038" height="257" alt="image" src="https://github.com/user-attachments/assets/ede16040-a6ee-4232-a903-ddb70b0fc76d" />
+
+
 <img width="933" height="214" alt="image" src="https://github.com/user-attachments/assets/cca212ff-3290-42d8-95b5-d1652bd66891" />
 
 **Validation checklist:**
