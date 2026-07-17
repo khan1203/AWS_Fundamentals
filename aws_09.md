@@ -158,7 +158,7 @@ ssh ubuntu@10.0.2.x   # Node2
 ssh ubuntu@10.0.2.x   # MySQL
 ```
 
-## 6. MySQL Setup (10.0.2.12)
+## 6. MySQL Database Setup 
 
 From Ngnix EC2, connect to the MySQL instance; install Docker and run the database container:
 
@@ -182,7 +182,7 @@ sudo docker run \
 
 We need to set the inbound security group to allow access on port 3306 from `node-sg` only.
 
-## 7. Node.js App Setup
+## 7. Node.js App Setup 
 
 ```bash
 sudo apt update && sudo apt install -y nodejs npm
@@ -372,49 +372,25 @@ COPY nginx.conf /etc/nginx/nginx.conf
  
 Save and exit: `Ctrl+O`, `Enter`, `Ctrl+X`
  
-#### Verify directory contents
+#### Build the image with custom configuration:
  
 ```bash
-ls -la
+docker build -t nginxL7 .
 ```
  
-#### Build the image
+#### Run the container:
  
 ```bash
-docker build -t custom-nginx-l7 .
+docker run -d -p 80:80 --name nginx-cont nginxL7
 ```
  
-#### Verify the image was built
+#### Confirm nginx.conf took effect inside the container:
  
 ```bash
-docker images
+docker exec -it nginx-cont cat /etc/nginx/nginx.conf
 ```
  
-#### Run the container
- 
-```bash
-docker run -d -p 80:80 --name my_nginx_l7 custom-nginx-l7
-```
- 
-#### Verify the container is running
- 
-```bash
-docker ps
-```
- 
-#### Check container logs
- 
-```bash
-docker logs my_nginx_l7
-```
- 
-#### Confirm nginx.conf took effect inside the container
- 
-```bash
-docker exec -it my_nginx_l7 cat /etc/nginx/nginx.conf
-```
- 
-#### Test from the host/machine
+#### Test from the host/machine:
  
 ```bash
 curl http://localhost               # host
