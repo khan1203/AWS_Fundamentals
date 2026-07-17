@@ -182,7 +182,7 @@ sudo docker run \
 
 We need to set the inbound security group to allow access on port 3306 from `node-sg` only.
 
-## 7. Node.js App Setup (10.0.2.10 and 10.0.2.11 — identical steps on both)
+## 7. Node.js App Setup
 
 ```bash
 sudo apt update && sudo apt install -y nodejs npm
