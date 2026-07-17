@@ -370,11 +370,11 @@ COPY nginx.conf /etc/nginx/nginx.conf
 
 Build Nginx Docker Image with our custom configuration:
 ```
-docker build -t custom-nginx .
+docker build -t nginL4 .
 ```
 Run Nginx Container having our custom configuration:
 ```
-docker run -d -p 80:80 --name my_nginx custom-nginx
+docker run -d -p 80:80 --name nginx-cont nginxL4
 ```
 
 
